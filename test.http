@@ -1,0 +1,23 @@
+GET  http://localhost:3000/api/products
+
+###
+GET http://localhost:3000/api/categories/1?page=1&limit=1
+
+###
+POST http://localhost:3000/api/cart/set-date
+Content-Type: application/json
+
+{
+    "tanggal_mulai": "2026-07-01",
+    "tanggal_selesai": "2026-07-02"
+}
+
+###
+PUT http://localhost:3000/api/cart/update-date
+Content-Type: application/json
+
+Header: x-session-id: "1dc4a6f4-245a-416d-87fe-e396b534adc1"
+{
+    "tanggal_mulai": "2026-07-03",
+    "tanggal_selesai": "2026-07-04"
+}

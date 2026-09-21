@@ -1,0 +1,205 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum BookingStatus {
+  pending_payment
+  paid
+  ongoing
+  completed
+  expired
+  canceled
+}
+
+enum StockChange {
+  IN
+  OUT
+  HOLD
+  RELEASE
+}
+
+enum PaymentStatus {
+  pending
+  settlement
+  expire
+  cancel
+  deny
+  refund
+}
+
+enum BookingSource {
+  online
+  offline
+}
+
+model Cart { 
+  id_cart     Int       @id @default(autoincrement())
+  session_id  String    @unique
+
+  tanggal_mulai    DateTime?
+  tanggal_selesai  DateTime?
+  
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  expired_at  DateTime?
+
+  items       CartItem[]
+}
+
+model CartItem {
+  id_item     Int     @id @default(autoincrement())
+  id_cart     Int
+  id_product  Int
+  jumlah      Int
+
+  is_available Boolean @default(true)
+
+  cart        Cart    @relation(fields: [id_cart], references: [id_cart], onDelete: Cascade)
+  product     Product @relation(fields: [id_product], references: [id_product])
+
+  @@index([id_cart])
+  @@index([id_product])
+}
+
+model Admin {
+  id_admin   Int      @id @default(autoincrement())
+  email      String   @unique
+  password   String
+  nama       String?
+
+  created_at DateTime @default(now())
+}
+
+model Product {
+  id_product      Int              @id @default(autoincrement())
+  nama            String
+  slug            String   @unique
+  deskripsi       String
+  harga_per_hari  Int
+  stok_total      Int
+  is_active       Boolean  @default(true)
+
+  category_id     Int?
+  category        Category? @relation(fields: [category_id], references: [id_category])
+  images          ProductImage[]
+
+  cartItems       CartItem[]
+  bookingDetails  BookingDetail[]
+  stockLogs       StockLog[]
+
+  @@index([category_id], name: "idx_category_id")
+  @@index([is_active, category_id], name: "idx_active_category")
+}
+
+model Category {
+  id_category Int       @id @default(autoincrement())
+  nama        String
+  slug        String    @unique
+
+  products    Product[]
+}
+
+model ProductImage {
+  id_image   Int    @id @default(autoincrement())
+  id_product Int
+  url        String
+
+  product Product @relation(fields: [id_product], references: [id_product])
+}
+
+model Booking {
+  id_booking       Int              @id @default(autoincrement())
+  kode_booking     String           @unique
+  nama_customer    String
+  no_hp            String
+  email            String?
+  alamat           String?
+  foto_identitas   String?          // path/url foto KTP/SIM/Kartu Pelajar
+  tanggal_mulai    DateTime
+  tanggal_selesai  DateTime
+
+  total_harga      Int
+  diskon           Int              @default(0) // Menyimpan nilai diskon dalam rupiah
+
+  status           BookingStatus    @default(pending_payment)
+  sumber           BookingSource    @default(online)
+  expired_at       DateTime?        // batas waktu pembayaran (created_at + 15 menit)
+  
+  tanggal_kembali  DateTime?
+  nominal_denda    Int              @default(0)
+  catatan_denda    String?          @db.Text
+
+  created_at       DateTime         @default(now())
+  updated_at       DateTime         @updatedAt
+
+  details          BookingDetail[]
+  payments         Payment[]
+}
+
+model BookingDetail {
+  id_detail   Int     @id @default(autoincrement())
+  id_booking  Int
+  id_product  Int
+  jumlah      Int
+  harga_sewa  Int     // snapshot harga_per_hari saat booking dibuat
+  subtotal    Int     // harga_sewa * jumlah * jumlah_hari
+
+  booking     Booking @relation(fields: [id_booking], references: [id_booking], onDelete: Cascade)
+  product     Product @relation(fields: [id_product], references: [id_product])
+
+  @@index([id_booking])
+  @@index([id_product])
+}
+
+model Payment {
+  id_payment    Int            @id @default(autoincrement())
+  id_booking    Int
+  metode        String
+  catatan       String?        @db.Text
+  jumlah_bayar  Int
+  status        PaymentStatus  @default(pending)
+  reference_id  String         @unique
+  payment_time  DateTime?
+
+  booking       Booking  @relation(fields: [id_booking], references: [id_booking])
+
+  @@index([id_booking])
+}
+
+model StockLog {
+  id_log     Int         @id @default(autoincrement())
+  id_product Int
+  perubahan  StockChange
+  jumlah     Int
+  keterangan String
+  created_at DateTime    @default(now())
+
+  product    Product  @relation(fields: [id_product], references: [id_product])
+
+  @@index([id_product])
+}
+
+model OTPVerification {
+  id_otp      Int      @id @default(autoincrement())
+  kontak      String
+  session_id  String   // 🔥 tambahin ini
+  kode_otp    String
+  expired_at  DateTime
+  is_verified Boolean  @default(false)
+  created_at  DateTime @default(now())
+
+  temp_data   Json?    // 🔥 TAMBAHAN INI
+
+  @@index([kontak])
+}
