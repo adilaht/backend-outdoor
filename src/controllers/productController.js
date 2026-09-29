@@ -644,5 +644,94 @@ export const getPopularProducts = async (req, res) => {
   }
 };
 
+// ==========================================
+// ENDPOINT KHUSUS CHATBOT
+// ==========================================
+export const getChatbotProducts = async (req, res) => {
+  try {
+    const { search, q, tanggal_mulai, tanggal_selesai } = req.query;
+    const queryText = search || q || "";
 
+    const whereClause = {
+      is_active: true,
+      ...(queryText && {
+        nama: { contains: queryText }
+      })
+    };
 
+    let stokMap = {};
+
+    // Jika ada tanggal, kita hitung stok yang sudah di-booking
+    if (tanggal_mulai && tanggal_selesai) {
+      const konflik = await prisma.bookingDetail.groupBy({
+        by: ["id_product"],
+        _sum: { jumlah: true },
+        where: {
+          booking: {
+            OR: [
+              {
+                status: { in: ["pending_payment", "paid", "ongoing"] },
+                AND: [
+                  { tanggal_mulai: { lte: new Date(tanggal_selesai) } },
+                  { tanggal_selesai: { gte: new Date(tanggal_mulai) } },
+                ],
+              },
+              {
+                status: "completed",
+                tanggal_kembali: { gte: new Date(tanggal_mulai) },
+                AND: [{ tanggal_mulai: { lte: new Date(tanggal_selesai) } }],
+              },
+            ],
+          },
+        },
+      });
+
+      stokMap = Object.fromEntries(
+        konflik.map((k) => [k.id_product, k._sum.jumlah || 0])
+      );
+
+      const conflictedProductIds = konflik.map((k) => k.id_product);
+
+      // Filter ID produk yang stok_total-nya sudah habis dipesan di tanggal tersebut
+      if (conflictedProductIds.length > 0) {
+        const productsStok = await prisma.product.findMany({
+          where: { id_product: { in: conflictedProductIds } },
+          select: { id_product: true, stok_total: true },
+        });
+
+        const fullyBookedProductIds = productsStok
+          .filter((p) => (stokMap[p.id_product] || 0) >= p.stok_total)
+          .map((p) => p.id_product);
+
+        if (fullyBookedProductIds.length > 0) {
+          whereClause.id_product = { notIn: fullyBookedProductIds };
+        }
+      }
+    }
+
+    // Hanya ambil 10 item yang masih memiliki stok untuk direkomendasikan chatbot
+    const products = await prisma.product.findMany({
+      where: whereClause,
+      select: {
+        id_product: true,
+        nama: true,
+        harga_per_hari: true,
+        stok_total: true
+      },
+      take: 10
+    });
+
+    // Sesuaikan stok_total dengan sisa stok aktual di tanggal tersebut
+    const finalProducts = products.map(p => ({
+      id_product: p.id_product,
+      nama: p.nama,
+      harga_per_hari: p.harga_per_hari,
+      stok_total: p.stok_total, // Kapasitas asli toko
+      stok_tersedia: p.stok_total - (stokMap[p.id_product] || 0) // Sisa ketersediaan di rentang tanggal
+    }));
+
+    res.json({ data: finalProducts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};

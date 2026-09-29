@@ -14,6 +14,7 @@ import bookingAdminRoutes from "./routes/bookingAdminRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import categoryRoutes from "./routes/categoryRoutes.js";
 import posRoutes from "./routes/posRoutes.js";
+import laporanRoutes from "./routes/laporanRoutes.js";
 
 // Import custom middleware
 import { sessionMiddleware } from "./middlewares/sessionMiddleware.js";
@@ -24,7 +25,7 @@ const app = express();
 
 // 1. Setup CORS paling atas
 app.use(cors({
-    origin: 'http://localhost:4000', // Port frontend Next.js lu
+    origin: process.env.FRONTEND_URL || 'http://localhost:4000', 
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     credentials: true
 }));
@@ -53,6 +54,7 @@ app.use("/api/admin/products", productAdminRoutes);
 app.use("/api/admin/bookings", bookingAdminRoutes);
 app.use("/api/admin/dashboard", dashboardRoutes);
 app.use("/api/admin/pos", posRoutes);
+app.use("/api/admin/laporan", laporanRoutes);
 
 // 6. Daftarkan semua Router Customer/Guest
 app.use("/api/categories", categoryRoutes);

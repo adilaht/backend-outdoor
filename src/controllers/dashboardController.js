@@ -131,6 +131,62 @@ export const getDashboardStats = async (req, res) => {
       }
     });
 
+    // 9. Utilitas Gudang
+    const allProducts = await prisma.product.findMany({
+      where: { is_active: true },
+      select: { stok_total: true }
+    });
+    const totalTersedia = allProducts.reduce((sum, p) => sum + p.stok_total, 0);
+    
+    // Alat yang sedang disewa (dari tabel booking_detail yang bookingnya ongoing)
+    const activeDetails = await prisma.bookingDetail.findMany({
+      where: {
+        booking: { status: "ongoing" }
+      },
+      select: { jumlah: true }
+    });
+    const totalDisewa = activeDetails.reduce((sum, d) => sum + d.jumlah, 0);
+    
+    const warehouse_utilization = {
+      tersedia: totalTersedia,
+      disewa: totalDisewa,
+      total_kapasitas: totalTersedia + totalDisewa
+    };
+
+    // 10. Top Products (Produk Terlaris)
+    const topProductsRaw = await prisma.bookingDetail.findMany({
+      where: {
+        booking: {
+          ...dateFilter,
+          status: { in: ["paid", "ongoing", "completed"] }
+        }
+      },
+      select: {
+        id_product: true,
+        jumlah: true,
+        product: {
+          select: { nama: true, images: true }
+        }
+      }
+    });
+
+    const productSales = new Map();
+    topProductsRaw.forEach(item => {
+      if (!productSales.has(item.id_product)) {
+        productSales.set(item.id_product, {
+          id_product: item.id_product,
+          nama: item.product.nama,
+          images: item.product.images,
+          total_dipinjam: 0
+        });
+      }
+      productSales.get(item.id_product).total_dipinjam += item.jumlah;
+    });
+
+    const topProducts = Array.from(productSales.values())
+      .sort((a, b) => b.total_dipinjam - a.total_dipinjam)
+      .slice(0, 5); // Ambil 5 terlaris
+
     res.json({
       data: {
         stats: {
@@ -142,7 +198,9 @@ export const getDashboardStats = async (req, res) => {
         low_stock_products: lowStockProducts,
         recent_bookings: recentBookings,
         chart_data: chartData,
-        calendar_bookings: calendarBookings
+        calendar_bookings: calendarBookings,
+        warehouse_utilization,
+        top_products: topProducts
       }
     });
   } catch (error) {
