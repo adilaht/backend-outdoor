@@ -3,8 +3,7 @@ import transporter from "../config/mailer.js";
 // Format tanggal ke bahasa Indonesia
 const formatDate = (dateStr) => {
   return new Intl.DateTimeFormat('id-ID', {
-    dateStyle: 'full',
-    timeStyle: 'short'
+    dateStyle: 'full'
   }).format(new Date(dateStr));
 };
 
@@ -38,7 +37,7 @@ export const sendPendingPaymentEmail = async (bookingData) => {
             <tr>
               <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${item.product?.nama || 'Produk Sewa'}</td>
               <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${item.jumlah}x</td>
-              <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${formatCurrency(item.harga_saat_booking)}</td>
+              <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${formatCurrency(item.harga_sewa || item.harga_saat_booking || 0)}</td>
             </tr>
           `).join('')}
         </table>
@@ -110,7 +109,7 @@ export const sendPaymentSuccessEmail = async (bookingData) => {
             <tr>
               <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${item.product?.nama || 'Produk Sewa'}</td>
               <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${item.jumlah}x</td>
-              <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${formatCurrency(item.harga_saat_booking)}</td>
+              <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${formatCurrency(item.harga_sewa || item.harga_saat_booking || 0)}</td>
             </tr>
           `).join('')}
         </table>

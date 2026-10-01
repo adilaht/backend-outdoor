@@ -8,14 +8,12 @@ import { getCache, setCache, invalidateCache } from "../utils/cacheService.js";
 
 export const getProducts = async (req, res) => {
   try {
-    const { page = 1, limit = 10, tanggal_mulai, tanggal_selesai } = req.query;
+    const { page = 1, limit = 10, tanggal_mulai, tanggal_selesai, category_id } = req.query;
     const take = Number(limit);
     const skip = (Number(page) - 1) * take;
 
     // bikin cache key unik berdasarkan query
-    const cacheKey = tanggal_mulai && tanggal_selesai
-      ? `products:page=${page}:limit=${limit}:mulai=${tanggal_mulai}:selesai=${tanggal_selesai}`
-      : `products:page=${page}:limit=${limit}`;
+    const cacheKey = `products:page=${page}:limit=${limit}:mulai=${tanggal_mulai || 'none'}:selesai=${tanggal_selesai || 'none'}:cat=${category_id || 'all'}`;
 
     // 1. cek cache dulu
     const cached = await getCache(cacheKey);
@@ -25,6 +23,9 @@ export const getProducts = async (req, res) => {
 
     // 2. query DB
     const whereClause = req.admin ? {} : { is_active: true };
+    if (category_id) {
+      whereClause.category_id = Number(category_id);
+    }
     let result;
 
     if (!tanggal_mulai || !tanggal_selesai) {
