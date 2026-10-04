@@ -2,7 +2,7 @@ import transporter from "../config/mailer.js";
 
 export const sendOTPEmail = async (to, kode_otp) => {
   const mailOptions = {
-    from: `"Outdoor Rent" <${process.env.EMAIL_USER}>`,
+    from: `"TwentyOne Outdoor" <${process.env.EMAIL_USER}>`,
     to,
     subject: "Kode OTP Booking",
     html: `

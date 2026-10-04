@@ -7,7 +7,14 @@ export const getLaporanData = async (req, res) => {
     let dateFilter = {};
     const now = new Date();
     
-    if (period && period !== 'all') {
+    if (period === 'custom' && req.query.startDate && req.query.endDate) {
+      dateFilter = {
+        created_at: {
+          gte: new Date(`${req.query.startDate}T00:00:00.000Z`),
+          lte: new Date(`${req.query.endDate}T23:59:59.999Z`)
+        }
+      };
+    } else if (period && period !== 'all') {
       const days = parseInt(period, 10);
       if (!isNaN(days)) {
         const thresholdDate = new Date(now);

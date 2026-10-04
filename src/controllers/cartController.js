@@ -198,32 +198,8 @@ export const updateCartDateController = async (req, res) => {
   try {
     const { tanggal_mulai, tanggal_selesai } = req.body;
 
-    // 1. Ambil data cart berdasarkan session_id saat ini
-    let cart = await getCartDetail(req.session_id);
-
-    // 🌟 PERBAIKAN ANTIPELURU: Gunakan upsert untuk menghindari error Unique Constraint P2002
-    if (!cart) {
-      const dateMulai = tanggal_mulai ? new Date(tanggal_mulai) : null;
-      const dateSelesai = tanggal_selesai ? new Date(tanggal_selesai) : null;
-
-      await prisma.cart.upsert({
-        where: { session_id: req.session_id },
-        // Jika ternyata datanya sudah ada di DB, update saja tanggalnya
-        update: {
-          tanggal_mulai: dateMulai,
-          tanggal_selesai: dateSelesai,
-        },
-        // Jika benar-benar belum ada di DB, baru buat baru
-        create: {
-          session_id: req.session_id,
-          tanggal_mulai: dateMulai,
-          tanggal_selesai: dateSelesai,
-        },
-      });
-
-      // Set objek items kosong agar tidak crash pada proses looping di bawah
-      cart = { items: [] };
-    }
+    // 1. Pastikan cart ada (bikin kalau belum ada)
+    let cart = await getOrCreateCart(req.session_id);
 
     // 2. Tetap jalankan fungsi bawaan lu untuk memastikan sinkronisasi state tanggal
     await setCartDates(
@@ -246,7 +222,10 @@ export const updateCartDateController = async (req, res) => {
       }
     }
 
-    // 4. Ambil kondisi data cart paling mutakhir untuk dilempar ke Next.js
+    // 4. Bersihkan cache lama biar ga nyangkut
+    await invalidateCache(`cart:${req.session_id}`);
+
+    // 5. Ambil kondisi data cart paling mutakhir untuk dilempar ke Next.js
     const updatedCart = await getCartDetail(req.session_id);
 
     res.json({

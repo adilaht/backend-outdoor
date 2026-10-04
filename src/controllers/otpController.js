@@ -7,9 +7,6 @@ export const sendOTP = async (req, res) => {
 
     await otpModel.createOTP(kontak, kode);
 
-    // Simulasi kirim OTP
-    console.log("OTP:", kode);
-
     res.json({ message: "OTP dikirim" });
   } catch (err) {
     res.status(500).json({ error: err.message });

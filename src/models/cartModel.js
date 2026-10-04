@@ -13,12 +13,28 @@ export const getOrCreateCart = async (session_id) => {
   });
 
   if (!cart) {
-    cart = await prisma.cart.create({
-      data: { session_id },
-      include: {
-        items: true,
-      },
-    });
+    try {
+      cart = await prisma.cart.create({
+        data: { session_id },
+        include: {
+          items: true,
+        },
+      });
+    } catch (error) {
+      // Tangani race condition jika request API masuk bersamaan (P2002)
+      if (error.code === 'P2002') {
+        cart = await prisma.cart.findUnique({
+          where: { session_id },
+          include: {
+            items: {
+              include: { product: true },
+            },
+          },
+        });
+      } else {
+        throw error;
+      }
+    }
   }
 
   return cart;
