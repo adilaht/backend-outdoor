@@ -1,5 +1,12 @@
 import multer from "multer";
 import path from "path";
+import fs from "fs";
+
+// Pastikan folder uploads ada
+const uploadDir = "uploads/";
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 // simpan ke folder uploads
 const storage = multer.diskStorage({
