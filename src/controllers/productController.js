@@ -257,6 +257,7 @@ export const createProduct = async (req, res) => {
 
     // invalidate cache setelah data berubah
     await invalidateCache("products:*");
+    await invalidateCache("categories:list");
 
     res.json({
       message: "Product berhasil dibuat",
@@ -348,6 +349,7 @@ export const updateProduct = async (req, res) => {
     // invalidate cache setelah data berubah
     await invalidateCache(`product:${id}`);
     await invalidateCache("products:*");
+    await invalidateCache("categories:list");
 
     res.json({
       message: "Product berhasil diupdate",
@@ -396,6 +398,7 @@ export const deleteProduct = async (req, res) => {
     // invalidate cache setelah data berubah
     await invalidateCache(`product:${id}`);
     await invalidateCache("products:*");
+    await invalidateCache("categories:list");
 
 
     res.json({
