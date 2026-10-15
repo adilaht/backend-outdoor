@@ -108,31 +108,27 @@ export const midtransWebhook = async (req, res) => {
 
         // JIKA PAID: Stok resmi OUT karena alat sudah aman dipesan
         if (finalBookingStatus === "paid") {
-          for (const item of booking.details) {
-            await tx.stockLog.create({
-              data: {
-                id_product: item.id_product,
-                perubahan: "OUT",
-                jumlah: item.jumlah,
-                keterangan: `Pembayaran berhasil - Booking ${orderId} (${tglMulai} s/d ${tglSelesai})`,
-              },
-            });
-          }
+          await tx.stockLog.createMany({
+            data: booking.details.map((item) => ({
+              id_product: item.id_product,
+              perubahan: "OUT",
+              jumlah: item.jumlah,
+              keterangan: `Pembayaran berhasil - Booking ${orderId} (${tglMulai} s/d ${tglSelesai})`,
+            })),
+          });
           console.log(`[Midtrans Webhook] Stok tercatat OUT untuk Booking ${orderId}.`);
         }
 
         // JIKA EXPIRED / CANCELED: Kembalikan stok yang di-hold tadi (IN)
         if (isCanceledOrExpired) {
-          for (const item of booking.details) {
-            await tx.stockLog.create({
-              data: {
-                id_product: item.id_product,
-                perubahan: "IN",
-                jumlah: item.jumlah,
-                keterangan: `Pembatalan/Sesi Habis otomatis sistem [${finalBookingStatus.toUpperCase()}] - Booking ${orderId} (Tgl: ${tglMulai} s/d ${tglSelesai})`,
-              },
-            });
-          }
+          await tx.stockLog.createMany({
+            data: booking.details.map((item) => ({
+              id_product: item.id_product,
+              perubahan: "IN",
+              jumlah: item.jumlah,
+              keterangan: `Pembatalan/Sesi Habis otomatis sistem [${finalBookingStatus.toUpperCase()}] - Booking ${orderId} (Tgl: ${tglMulai} s/d ${tglSelesai})`,
+            })),
+          });
           console.log(`[Midtrans Webhook] Stok untuk Booking ${orderId} telah dikembalikan (IN).`);
         }
       });

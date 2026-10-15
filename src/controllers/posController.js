@@ -1,6 +1,6 @@
 import prisma from "../config/prisma.js";
 import * as cartModel from "../models/cartModel.js";
-import { checkStock } from "../services/stockService.js";
+import { checkStock, checkStockBatch } from "../services/stockService.js";
 import { buildImageUrl } from "../utils/fileHelper.js";
 import { invalidateCache } from "../utils/cacheService.js";
 
@@ -184,17 +184,15 @@ const createPaidBooking = async ({
     badRequest("Ada produk yang tidak ditemukan");
   }
 
-  for (const item of normalizedItems) {
-    const stock = await checkStock({
-      id_product: item.id_product,
-      jumlah: item.jumlah,
-      tanggal_mulai: start,
-      tanggal_selesai: end,
-    });
+  const { is_all_available, results: stockResults } = await checkStockBatch({
+    items: normalizedItems,
+    tanggal_mulai: start,
+    tanggal_selesai: end,
+  });
 
-    if (!stock.available) {
-      badRequest(`Stok produk ID ${item.id_product} tidak mencukupi`);
-    }
+  if (!is_all_available) {
+    const unavailable = stockResults.find((r) => !r.is_available);
+    badRequest(`Stok produk [${unavailable.nama}] tidak mencukupi`);
   }
 
   const productMap = new Map(products.map((product) => [product.id_product, product]));
@@ -273,16 +271,14 @@ const createPaidBooking = async ({
       },
     });
 
-    for (const item of normalizedItems) {
-      await tx.stockLog.create({
-        data: {
-          id_product: item.id_product,
-          perubahan: "OUT",
-          jumlah: item.jumlah,
-          keterangan: `POS offline ${kode_booking}`,
-        },
-      });
-    }
+    await tx.stockLog.createMany({
+      data: normalizedItems.map((item) => ({
+        id_product: item.id_product,
+        perubahan: "OUT",
+        jumlah: item.jumlah,
+        keterangan: `POS offline ${kode_booking}`,
+      })),
+    });
 
     if (cartIdToDelete) {
       await tx.cart.delete({
@@ -377,16 +373,21 @@ export const setPosCartDate = async (req, res) => {
 
     const cart = await getCartWithProducts(posSession);
 
-    for (const item of cart.items) {
-      const stock = await checkStock({
-        id_product: item.id_product,
-        jumlah: item.jumlah,
+    if (cart.items && cart.items.length > 0) {
+      const { results } = await checkStockBatch({
+        items: cart.items,
         tanggal_mulai,
         tanggal_selesai,
       });
 
-      if (!stock.available) {
-        await cartModel.deleteCartItem(item.id_item);
+      const unavailableIds = results
+        .filter((r) => !r.is_available)
+        .map((r) => r.id_item);
+
+      if (unavailableIds.length > 0) {
+        await prisma.cartItem.deleteMany({
+          where: { id_item: { in: unavailableIds } },
+        });
       }
     }
 

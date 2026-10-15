@@ -48,17 +48,15 @@ export const startCronJobs = () => {
             const tglMulai = new Date(booking.tanggal_mulai).toISOString().split("T")[0];
             const tglSelesai = new Date(booking.tanggal_selesai).toISOString().split("T")[0];
 
-            // Kembalikan stok yang di-hold (IN)
-            for (const item of booking.details) {
-              await tx.stockLog.create({
-                data: {
-                  id_product: item.id_product,
-                  perubahan: "IN",
-                  jumlah: item.jumlah,
-                  keterangan: `Pembatalan Otomatis Sistem [EXPIRED] - Booking ${booking.kode_booking} (Tgl: ${tglMulai} s/d ${tglSelesai})`
-                }
-              });
-            }
+            // Kembalikan stok yang di-hold (IN) secara batch
+            await tx.stockLog.createMany({
+              data: booking.details.map((item) => ({
+                id_product: item.id_product,
+                perubahan: "IN",
+                jumlah: item.jumlah,
+                keterangan: `Pembatalan Otomatis Sistem [EXPIRED] - Booking ${booking.kode_booking} (Tgl: ${tglMulai} s/d ${tglSelesai})`,
+              })),
+            });
             
             console.log(`[Cron Sweeper] Booking ${booking.kode_booking} dibatalkan. Stok dikembalikan.`);
           });

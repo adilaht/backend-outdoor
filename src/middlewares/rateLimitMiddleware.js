@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 // Mencegah scraping massal dan infinite loop di frontend
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 menit
-  max: 100, // Limit setiap IP maksimal 100 request per windowMs
+  max: process.env.NODE_ENV === "production" ? 1000 : 5000, // 1000 di production, 5000 di development agar leluasa saat testing
   message: {
     success: false,
     message: "Terlalu banyak permintaan dari IP ini, silakan coba lagi setelah 15 menit."

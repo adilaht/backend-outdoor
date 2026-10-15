@@ -7,6 +7,8 @@ import fs from "fs";
 import path from "path";
 import midtransClient from "midtrans-client";
 import crypto from "crypto";
+import { getBookingConflictConditions, checkStockBatch } from "../services/stockService.js";
+import { invalidateCache } from "../utils/cacheService.js";
 
 // Inisialisasi Midtrans Snap Client
 const snap = new midtransClient.Snap({
@@ -53,39 +55,18 @@ export const checkoutBooking = async (req, res) => {
       return res.status(400).json({ error: "Keranjang belanja Anda masih kosong" });
     }
 
-    // 🔥 VALIDASI STOK
-    for (const item of cart.items) {
-      const konflik = await prisma.bookingDetail.findMany({
-        where: {
-          id_product: item.id_product,
-          booking: {
-            OR: [
-              {
-                status: { in: ["pending_payment", "paid", "ongoing"] },
-                AND: [
-                  { tanggal_mulai: { lte: dateSelesai } },
-                  { tanggal_selesai: { gte: dateMulai } },
-                ],
-              },
-              {
-                status: "completed",
-                tanggal_kembali: { gte: dateMulai },
-                AND: [
-                  { tanggal_mulai: { lte: dateSelesai } },
-                ],
-              },
-            ],
-          },
-        },
+    // 🔥 VALIDASI STOK BATCH (Bebas N+1)
+    const { is_all_available, results: checkoutStockResults } = await checkStockBatch({
+      items: cart.items,
+      tanggal_mulai: dateMulai,
+      tanggal_selesai: dateSelesai,
+    });
+
+    if (!is_all_available) {
+      const unavailable = checkoutStockResults.find((r) => !r.is_available);
+      return res.status(400).json({
+        error: `Stok produk [${unavailable.nama}] tidak mencukupi untuk rentang tanggal tersebut.`,
       });
-
-      const totalDipakai = konflik.reduce((sum, d) => sum + d.jumlah, 0);
-
-      if (totalDipakai + item.jumlah > item.product.stok_total) {
-        return res.status(400).json({
-          error: `Stok produk [${item.product.nama}] tidak mencukupi untuk rentang tanggal tersebut.`,
-        });
-      }
     }
 
     // Hapus rekam jejak kode OTP lama yang hangus / belum terverifikasi
@@ -149,13 +130,18 @@ export const verifyBooking = async (req, res) => {
   try {
     const { kode_otp } = req.body;
 
+    // ──────────────────────────────────────────────────────────────
+    // 🛡️ LANGKAH 0: Cari OTP Awal (Read-Only, di LUAR transaksi)
+    // Tujuan: Validasi cepat sebelum masuk transaksi berat.
+    //         Jika OTP salah / expired, tolak langsung tanpa membebani database.
+    // ──────────────────────────────────────────────────────────────
     const otp = await prisma.oTPVerification.findFirst({
       where: {
         session_id: req.session_id,
         kode_otp,
         is_verified: false,
         expired_at: {
-          gt: new Date(), // Menjaga perbandingan UTC murni database vs server
+          gt: new Date(),
         },
       },
       orderBy: {
@@ -172,6 +158,8 @@ export const verifyBooking = async (req, res) => {
     // Hitung selisih hari rental
     const start = new Date(data.tanggal_mulai);
     const end = new Date(data.tanggal_selesai);
+    const dateMulai = new Date(`${data.tanggal_mulai}T00:00:00.000Z`);
+    const dateSelesai = new Date(`${data.tanggal_selesai}T23:59:59.000Z`);
     const diffDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) || 1;
 
     let total_harga = 0;
@@ -188,37 +176,78 @@ export const verifyBooking = async (req, res) => {
     });
 
     // 1. Pembuatan kode_booking / invoice resmi
-
-    // 🌟 KODE BARU (Kombinasi Tanggal + Kriptografi Acak):
-    const tgl = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // Hasilnya: "20260702"
-    const hashAcak = crypto.randomBytes(2).toString("hex").toUpperCase(); // Hasilnya 4 karakter acak, misal: "F3B8"
-
+    const tgl = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const hashAcak = crypto.randomBytes(2).toString("hex").toUpperCase();
     const kode_booking = `BOOK-${tgl}-${hashAcak}`;
-    // Output final super estetik: BOOK-20260702-F3B8
 
     // 2. 📂 PROSES PEMINDAHAN FILE KTP KE FOLDER KODE_BOOKING
-    const oldPath = data.foto_identitas; // Letaknya masih di: storage/private/bookings/session_id/identitas_xxx.jpg
+    const oldPath = data.foto_identitas;
     const newFolder = `./storage/private/bookings/${kode_booking}`;
     const filename = path.basename(oldPath);
     const finalDbPath = `storage/private/bookings/${kode_booking}/${filename}`;
 
     if (fs.existsSync(`./${oldPath}`)) {
-      // Buat folder kode_booking jika belum ada
       if (!fs.existsSync(newFolder)) {
         fs.mkdirSync(newFolder, { recursive: true });
       }
-      // Pindahkan file fisiknya
       fs.renameSync(`./${oldPath}`, path.join(newFolder, filename));
 
-      // Hapus folder session_id lama agar server bersih
       const oldFolder = `./storage/private/bookings/${req.session_id}`;
       if (fs.existsSync(oldFolder)) {
         fs.rmdirSync(oldFolder, { recursive: true });
       }
     }
 
-    // 3. Simpan booking ke database lewat Prisma Transaction
+    // ──────────────────────────────────────────────────────────────
+    // 3. 🔒 TRANSAKSI DATABASE ATOMIK (Anti Race Condition)
+    //    Semua operasi kritis dijalankan di dalam 1 transaksi.
+    //    Jika salah satu langkah gagal, SEMUA di-rollback otomatis.
+    // ──────────────────────────────────────────────────────────────
     const booking = await prisma.$transaction(async (tx) => {
+
+      // ┌─────────────────────────────────────────────────────────┐
+      // │ 🛡️ GUARD 1: Kunci OTP Secara Atomik (Anti Double-Click)│
+      // │                                                         │
+      // │ Menggunakan updateMany dengan kondisi is_verified:false. │
+      // │ Jika 2 request masuk berbarengan, hanya REQUEST PERTAMA │
+      // │ yang berhasil meng-update (count = 1). Request kedua    │
+      // │ akan mendapat count = 0 karena baris sudah berubah.     │
+      // └─────────────────────────────────────────────────────────┘
+      const claimResult = await tx.oTPVerification.updateMany({
+        where: {
+          id_otp: otp.id_otp,
+          is_verified: false, // Kondisi kunci: hanya bisa diambil jika BELUM terverifikasi
+        },
+        data: {
+          is_verified: true,
+        },
+      });
+
+      // Jika count = 0, artinya request lain sudah mengklaim OTP ini lebih dulu
+      if (claimResult.count === 0) {
+        throw new Error("OTP sudah digunakan oleh permintaan lain. Silakan ulangi proses checkout.");
+      }
+
+      // ┌─────────────────────────────────────────────────────────┐
+      // │ 🛡️ GUARD 2: Validasi Ulang Stok (Anti Overbooking Batch) │
+      // └─────────────────────────────────────────────────────────┘
+      const { is_all_available, results: verifyStockResults } = await checkStockBatch({
+        items: data.items,
+        tanggal_mulai: data.tanggal_mulai,
+        tanggal_selesai: data.tanggal_selesai,
+        prismaClient: tx,
+      });
+
+      if (!is_all_available) {
+        const unavailable = verifyStockResults.find((r) => !r.is_available);
+        throw new Error(
+          `Maaf, stok produk [${unavailable.nama}] baru saja diambil pelanggan lain untuk rentang tanggal tersebut.`
+        );
+      }
+
+      // ┌─────────────────────────────────────────────────────────┐
+      // │ ✅ Semua guard lolos — aman untuk membuat booking.      │
+      // └─────────────────────────────────────────────────────────┘
       const newBooking = await tx.booking.create({
         data: {
           kode_booking,
@@ -226,29 +255,26 @@ export const verifyBooking = async (req, res) => {
           email: data.email,
           no_hp: data.no_hp,
           alamat: data.alamat || null,
-          foto_identitas: finalDbPath, // 🌟 Path database sudah diperbarui ke folder final
+          foto_identitas: finalDbPath,
           tanggal_mulai: start,
           tanggal_selesai: end,
           total_harga,
-          status: "pending_payment", // Set status awal menunggu pembayaran
+          status: "pending_payment",
           details: {
             create: detailsData,
           },
         },
       });
 
-      // Update Stock Log (Hold sementara karena status pending_payment)
-      for (const item of data.items) {
-        await tx.stockLog.create({
-          data: {
-            id_product: item.id_product,
-            perubahan: "HOLD",
-            jumlah: item.jumlah,
-            keterangan: `Booking ${kode_booking} (Menunggu Pembayaran)`,
-          },
-        });
-      }
-
+      // Update Stock Log secara Batch INSERT (Hold sementara karena status pending_payment)
+      await tx.stockLog.createMany({
+        data: data.items.map((item) => ({
+          id_product: item.id_product,
+          perubahan: "HOLD",
+          jumlah: item.jumlah,
+          keterangan: `Booking ${kode_booking} (Menunggu Pembayaran)`,
+        })),
+      });
 
       // Hapus Cart Belanjaan Guest
       await tx.cart.delete({
@@ -267,26 +293,22 @@ export const verifyBooking = async (req, res) => {
         }
       });
 
-      // Update status OTP menjadi terverifikasi
-      await tx.oTPVerification.update({
-        where: { id_otp: otp.id_otp },
-        data: { is_verified: true },
-      });
-
       return newBooking;
     });
+
+    await invalidateCache("products:*");
 
     // 4. 💳 INTEGRASI MIDTRANS SNAP API
     const itemDetails = data.items.map((item) => ({
       id: item.id_product,
-      price: item.product.harga_per_hari * diffDays, // Harga per unit total durasi hari
+      price: item.product.harga_per_hari * diffDays,
       quantity: item.jumlah,
       name: item.product.nama,
     }));
 
     const parameterTransaction = {
       transaction_details: {
-        order_id: kode_booking, // Wajib unik
+        order_id: kode_booking,
         gross_amount: total_harga,
       },
       item_details: itemDetails,
@@ -295,13 +317,12 @@ export const verifyBooking = async (req, res) => {
         email: booking.email,
         phone: booking.no_hp,
       },
-      // Set expired otomatis dari sisi Midtrans (15 Menit)
       custom_expiry: {
         expiry_duration: 15,
         unit: "minute"
       },
       callbacks: {
-        finish: `${process.env.FRONTEND_URL}/checkout/finish`, // Link redirect Next.js lu nanti
+        finish: `${process.env.FRONTEND_URL}/checkout/finish`,
       }
     };
 
@@ -320,14 +341,19 @@ export const verifyBooking = async (req, res) => {
     res.json({
       success: true,
       message: "Verifikasi OTP sukses & token pembayaran berhasil dibuat.",
-      snapToken: midtransTransaction.token, // 🌟 Token ini yang ditunggu Step 2 Frontend!
+      snapToken: midtransTransaction.token,
       totalHarga: total_harga,
       data: booking,
     });
 
   } catch (error) {
     console.error("💥 ERROR PADA VERIFY BOOKING CONTROLLER:", error);
-    res.status(500).json({ error: error.message });
+
+    // Bedakan antara error validasi (race condition) dan error server
+    const isValidationError = error.message.includes("stok produk") || error.message.includes("OTP sudah digunakan");
+    const statusCode = isValidationError ? 409 : 500; // 409 = Conflict (standar HTTP untuk race condition)
+
+    res.status(statusCode).json({ error: error.message });
   }
 };
 

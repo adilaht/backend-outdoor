@@ -1,4 +1,5 @@
 import prisma from "../config/prisma.js";
+import { invalidateCache } from "../utils/cacheService.js";
 
 // GET ALL BOOKINGS
 export const getBookings = async (req, res) => {
@@ -134,30 +135,26 @@ export const updateBookingStatus = async (req, res) => {
       if (wasActive && isInactiveNow) {
         const logKeterangan = `Pembatalan/expired untuk Booking ${booking.kode_booking}`;
 
-        for (const item of booking.details) {
-          await tx.stockLog.create({
-            data: {
-              id_product: item.id_product,
-              perubahan: "IN",
-              jumlah: item.jumlah,
-              keterangan: logKeterangan
-            }
-          });
-        }
+        await tx.stockLog.createMany({
+          data: booking.details.map((item) => ({
+            id_product: item.id_product,
+            perubahan: "IN",
+            jumlah: item.jumlah,
+            keterangan: logKeterangan,
+          })),
+        });
       }
 
       // Catat log stok IN untuk completed (pelepasan stok H+1 via tanggal_kembali)
       if (wasActive && status === "completed") {
-        for (const item of booking.details) {
-          await tx.stockLog.create({
-            data: {
-              id_product: item.id_product,
-              perubahan: "IN",
-              jumlah: item.jumlah,
-              keterangan: `Pengembalian barang untuk Booking ${booking.kode_booking} (stok tersedia H+1)`
-            }
-          });
-        }
+        await tx.stockLog.createMany({
+          data: booking.details.map((item) => ({
+            id_product: item.id_product,
+            perubahan: "IN",
+            jumlah: item.jumlah,
+            keterangan: `Pengembalian barang untuk Booking ${booking.kode_booking} (stok tersedia H+1)`,
+          })),
+        });
       }
 
       // LOGIKA KELUAR STOK LAGI (Jika booking yang tadinya dibatalkan/selesai diaktifkan kembali)
@@ -165,20 +162,20 @@ export const updateBookingStatus = async (req, res) => {
       const isActiveNow = ["pending_payment", "paid", "ongoing"].includes(status);
 
       if (wasInactive && isActiveNow) {
-        for (const item of booking.details) {
-          await tx.stockLog.create({
-            data: {
-              id_product: item.id_product,
-              perubahan: "OUT",
-              jumlah: item.jumlah,
-              keterangan: `Re-aktivasi booking ke status ${status} untuk ${booking.kode_booking}`
-            }
-          });
-        }
+        await tx.stockLog.createMany({
+          data: booking.details.map((item) => ({
+            id_product: item.id_product,
+            perubahan: "OUT",
+            jumlah: item.jumlah,
+            keterangan: `Re-aktivasi booking ke status ${status} untuk ${booking.kode_booking}`,
+          })),
+        });
       }
 
       return updated;
     });
+
+    await invalidateCache("products:*");
 
     res.json({
       message: `Status booking berhasil diubah dari ${oldStatus} menjadi ${status}`,

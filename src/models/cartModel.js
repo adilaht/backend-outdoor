@@ -7,7 +7,11 @@ export const getOrCreateCart = async (session_id) => {
     where: { session_id },
     include: {
       items: {
-        include: { product: true },
+        include: { 
+          product: {
+            include: { images: true }
+          }
+        },
       },
     },
   });
@@ -94,7 +98,9 @@ export const getCartDetail = async (session_id) => {
     include: {
       items: {
         include: {
-          product: true,
+          product: {
+            include: { images: true }
+          }
         },
       },
     },

@@ -8,7 +8,7 @@ import {
   clearCart,
   calculateCartTotal,
 } from "../models/cartModel.js";
-import { checkStock } from "../services/stockService.js";
+import { checkStock, checkStockBatch } from "../services/stockService.js";
 import prisma from "../config/prisma.js";
 import { getCache, setCache, invalidateCache } from "../utils/cacheService.js";
 
@@ -50,10 +50,15 @@ export const addToCartController = async (req, res) => {
       });
     }
 
-    // 🔥 VALIDASI STOK
+    // Cari tahu apakah barang ini udah ada di keranjang sebelumnya
+    const existingItem = cart.items?.find((item) => item.id_product === id_product);
+    const existingJumlah = existingItem ? existingItem.jumlah : 0;
+    const totalJumlahDiminta = existingJumlah + jumlah;
+
+    // 🔥 VALIDASI STOK (cek dengan totalJumlahDiminta)
     const { available } = await checkStock({
       id_product,
-      jumlah,
+      jumlah: totalJumlahDiminta,
       tanggal_mulai: cart.tanggal_mulai,
       tanggal_selesai: cart.tanggal_selesai,
     });
@@ -77,21 +82,19 @@ export const addToCartController = async (req, res) => {
   }
 };
 
-// ✅ 3. GET CART
+// ✅ 3. GET CART (dengan pengecekan stok real-time per item)
 export const getCartController = async (req, res) => {
   try {
     const sessionId = req.session_id;
     const cacheKey = `cart:${sessionId}`;
 
-    // 1. cek cache
+    // 1. Cek cache Redis terlebih dahulu
     const cached = await getCache(cacheKey);
     if (cached) {
-      // 🌟 PERBAIKAN: Karena data di dalam 'cached' sudah berupa objek matang, 
-      // langsung return objeknya murni tanpa dibungkus { data: cached } lagi!
       return res.json(cached);
     }
 
-    // 2. query DB / service
+    // 2. Query DB
     const cart = await getCartDetail(sessionId);
 
     if (!cart) {
@@ -101,12 +104,33 @@ export const getCartController = async (req, res) => {
       });
     }
 
+    // 3. 🛡️ Enrichment: Cek ketersediaan stok real-time untuk setiap item
+    //    Jika cart punya tanggal sewa, validasi stok berdasarkan periode tersebut.
+    //    Hasilnya ditempelkan ke setiap item sebagai is_available + stok_tersedia.
+    let enrichedItems = cart.items;
+
+    if (cart.tanggal_mulai && cart.tanggal_selesai && cart.items.length > 0) {
+      try {
+        const { results } = await checkStockBatch({
+          items: cart.items,
+          tanggal_mulai: cart.tanggal_mulai,
+          tanggal_selesai: cart.tanggal_selesai,
+        });
+        enrichedItems = results;
+      } catch (err) {
+        console.error("Gagal batch cek stok keranjang:", err);
+      }
+    }
+
     const result = {
-      data: cart,
+      data: {
+        ...cart,
+        items: enrichedItems,
+      },
     };
 
-    // 3. simpan ke cache TTL 30 detik
-    await setCache(cacheKey, result, 30);
+    // 4. Simpan ke cache Redis dengan TTL 15 detik (lebih pendek agar stok lebih fresh)
+    await setCache(cacheKey, result, 15);
 
     res.json(result);
   } catch (error) {
@@ -208,17 +232,22 @@ export const updateCartDateController = async (req, res) => {
       tanggal_selesai
     );
 
-    // 🔥 3. Cek ulang semua item
-    for (const item of cart.items) {
-      const { available } = await checkStock({
-        id_product: item.id_product,
-        jumlah: item.jumlah,
+    // 🔥 3. Cek ulang semua item secara batch (Bebas N+1)
+    if (cart.items && cart.items.length > 0) {
+      const { results } = await checkStockBatch({
+        items: cart.items,
         tanggal_mulai,
         tanggal_selesai,
       });
 
-      if (!available) {
-        await deleteCartItem(item.id_item);
+      const unavailableItemIds = results
+        .filter((r) => !r.is_available)
+        .map((r) => r.id_item);
+
+      if (unavailableItemIds.length > 0) {
+        await prisma.cartItem.deleteMany({
+          where: { id_item: { in: unavailableItemIds } },
+        });
       }
     }
 

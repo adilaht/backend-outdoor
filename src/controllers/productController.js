@@ -4,6 +4,7 @@ import slugify from "slugify";
 import { deleteFile } from "../utils/deleteFile.js";
 import { buildImageUrl } from "../utils/fileHelper.js";
 import { getCache, setCache, invalidateCache } from "../utils/cacheService.js";
+import { getBookingConflictConditions, checkStock } from "../services/stockService.js";
 
 
 export const getProducts = async (req, res) => {
@@ -65,25 +66,14 @@ export const getProducts = async (req, res) => {
       };
     } else {
       // ADA FILTER TANGGAL
+      const bookingConditions = getBookingConflictConditions(tanggal_mulai, tanggal_selesai);
+
       const konflik = await prisma.bookingDetail.groupBy({
         by: ["id_product"],
         _sum: { jumlah: true },
         where: {
           booking: {
-            OR: [
-              {
-                status: { in: ["pending_payment", "paid", "ongoing"] },
-                AND: [
-                  { tanggal_mulai: { lte: new Date(tanggal_selesai) } },
-                  { tanggal_selesai: { gte: new Date(tanggal_mulai) } },
-                ],
-              },
-              {
-                status: "completed",
-                tanggal_kembali: { gte: new Date(tanggal_mulai) },
-                AND: [{ tanggal_mulai: { lte: new Date(tanggal_selesai) } }],
-              },
-            ],
+            OR: bookingConditions,
           },
         },
       });
@@ -151,7 +141,7 @@ export const getProducts = async (req, res) => {
     }
 
     // 3. simpan hasil ke cache (TTL 60 detik)
-    await setCache(cacheKey, result, 60 * 60);
+    await setCache(cacheKey, result, 60);
 
     res.json(result);
   } catch (error) {
@@ -163,7 +153,10 @@ export const getProducts = async (req, res) => {
 export const getProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const cacheKey = `product:${id}`;
+    const { tanggal_mulai, tanggal_selesai } = req.query;
+    const cacheKey = tanggal_mulai && tanggal_selesai
+      ? `product:${id}:mulai=${tanggal_mulai}:selesai=${tanggal_selesai}`
+      : `product:${id}`;
 
     // 1. cek cache dulu
     const cached = await getCache(cacheKey);
@@ -174,7 +167,7 @@ export const getProduct = async (req, res) => {
     // 2. query DB
     const product = await prisma.product.findUnique({
       where: { id_product: Number(id) },
-      include: { images: true },
+      include: { images: true, category: true },
     });
 
     if (!product) {
@@ -186,15 +179,31 @@ export const getProduct = async (req, res) => {
       return res.status(404).json({ error: "Product tidak ditemukan" });
     }
 
+    let stok_tersedia = product.stok_total;
+    if (tanggal_mulai && tanggal_selesai) {
+      try {
+        const stockInfo = await checkStock({
+          id_product: Number(id),
+          jumlah: 1,
+          tanggal_mulai,
+          tanggal_selesai,
+        });
+        stok_tersedia = stockInfo.sisa;
+      } catch (err) {
+        console.error("Gagal cek stok detail produk:", err);
+      }
+    }
+
     const result = {
       ...product,
+      stok_tersedia,
       images: product.images.map((img) => ({
         ...img,
         url: buildImageUrl(req, img.url),
       })),
     };
 
-    // 3. simpan ke cache (TTL 30–60 detik)
+    // 3. simpan ke cache (TTL 60 detik)
     await setCache(cacheKey, result, 60);
 
     res.json(result);
@@ -667,25 +676,14 @@ export const getChatbotProducts = async (req, res) => {
 
     // Jika ada tanggal, kita hitung stok yang sudah di-booking
     if (tanggal_mulai && tanggal_selesai) {
+      const bookingConditions = getBookingConflictConditions(tanggal_mulai, tanggal_selesai);
+
       const konflik = await prisma.bookingDetail.groupBy({
         by: ["id_product"],
         _sum: { jumlah: true },
         where: {
           booking: {
-            OR: [
-              {
-                status: { in: ["pending_payment", "paid", "ongoing"] },
-                AND: [
-                  { tanggal_mulai: { lte: new Date(tanggal_selesai) } },
-                  { tanggal_selesai: { gte: new Date(tanggal_mulai) } },
-                ],
-              },
-              {
-                status: "completed",
-                tanggal_kembali: { gte: new Date(tanggal_mulai) },
-                AND: [{ tanggal_mulai: { lte: new Date(tanggal_selesai) } }],
-              },
-            ],
+            OR: bookingConditions,
           },
         },
       });

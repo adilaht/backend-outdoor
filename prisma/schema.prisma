@@ -145,6 +145,11 @@ model Booking {
 
   details          BookingDetail[]
   payments         Payment[]
+
+  @@index([status, tanggal_mulai, tanggal_selesai], name: "idx_booking_status_dates")
+  @@index([status, tanggal_kembali], name: "idx_booking_status_kembali")
+  @@index([created_at], name: "idx_booking_created_at")
+  @@index([status, expired_at], name: "idx_booking_status_expired")
 }
 
 model BookingDetail {
@@ -160,6 +165,7 @@ model BookingDetail {
 
   @@index([id_booking])
   @@index([id_product])
+  @@index([id_product, id_booking], name: "idx_detail_product_booking")
 }
 
 model Payment {
@@ -175,6 +181,7 @@ model Payment {
   booking       Booking  @relation(fields: [id_booking], references: [id_booking])
 
   @@index([id_booking])
+  @@index([id_booking, status], name: "idx_payment_booking_status")
 }
 
 model StockLog {
@@ -188,6 +195,7 @@ model StockLog {
   product    Product  @relation(fields: [id_product], references: [id_product])
 
   @@index([id_product])
+  @@index([id_product, created_at], name: "idx_stocklog_product_created")
 }
 
 model OTPVerification {
@@ -202,4 +210,5 @@ model OTPVerification {
   temp_data   Json?    // 🔥 TAMBAHAN INI
 
   @@index([kontak])
+  @@index([session_id, is_verified], name: "idx_otp_session_verified")
 }
