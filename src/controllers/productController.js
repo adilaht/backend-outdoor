@@ -82,28 +82,11 @@ export const getProducts = async (req, res) => {
         konflik.map((k) => [k.id_product, k._sum.jumlah || 0])
       );
 
-      const conflictedProductIds = konflik.map((k) => k.id_product);
-
-      let fullyBookedProductIds = [];
-      if (conflictedProductIds.length > 0) {
-        const productsStok = await prisma.product.findMany({
-          where: { id_product: { in: conflictedProductIds } },
-          select: { id_product: true, stok_total: true },
-        });
-
-        fullyBookedProductIds = productsStok
-          .filter((p) => (stokMap[p.id_product] || 0) >= p.stok_total)
-          .map((p) => p.id_product);
-      }
-
       const [products, total] = await Promise.all([
         prisma.product.findMany({
           skip,
           take,
-          where: {
-            ...whereClause,
-            id_product: { notIn: fullyBookedProductIds },
-          },
+          where: whereClause,
           orderBy: { id_product: "asc" },
           include: {
             images: true,
@@ -115,16 +98,13 @@ export const getProducts = async (req, res) => {
           },
         }),
         prisma.product.count({
-          where: {
-            ...whereClause,
-            id_product: { notIn: fullyBookedProductIds },
-          },
+          where: whereClause,
         }),
       ]);
 
       const mapped = products.map((p) => ({
         ...p,
-        stok_tersedia: p.stok_total - (stokMap[p.id_product] || 0),
+        stok_tersedia: Math.max(0, p.stok_total - (stokMap[p.id_product] || 0)),
         images: p.images.map((img) => ({
           ...img,
           url: buildImageUrl(req, img.url),
