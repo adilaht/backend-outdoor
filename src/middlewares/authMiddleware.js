@@ -12,6 +12,11 @@ export const authMiddleware = (req, res, next) => {
     }
   }
 
+  // 3. Fallback ke Query Parameter (?token=...) khusus untuk media/file statis (seperti <img> tag)
+  if (!token && req.query?.token) {
+    token = req.query.token;
+  }
+
   if (!token) {
     return res.status(401).json({ message: "Unauthorized: Token tidak ditemukan" });
   }

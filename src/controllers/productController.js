@@ -643,19 +643,24 @@ export const getPopularProducts = async (req, res) => {
 export const getChatbotProducts = async (req, res) => {
   try {
     const { search, q, tanggal_mulai, tanggal_selesai } = req.query;
-    const queryText = search || q || "";
+    const queryText = (search || q || "").trim();
 
+    // Support pencarian multi-kata (contoh: "tenda 4" cocok dengan "Tenda Dome Kapasitas 4 Orang")
+    const words = queryText.split(/\s+/).filter(Boolean);
     const whereClause = {
       is_active: true,
-      ...(queryText && {
-        nama: { contains: queryText }
-      })
+      ...(words.length > 0 && {
+        AND: words.map((w) => ({
+          nama: { contains: w },
+        })),
+      }),
     };
 
     let stokMap = {};
+    const isDateFiltered = Boolean(tanggal_mulai && tanggal_selesai);
 
-    // Jika ada tanggal, kita hitung stok yang sudah di-booking
-    if (tanggal_mulai && tanggal_selesai) {
+    // Jika ada tanggal, kita hitung stok yang sudah di-booking menggunakan logika smart locking & buffer
+    if (isDateFiltered) {
       const bookingConditions = getBookingConflictConditions(tanggal_mulai, tanggal_selesai);
 
       const konflik = await prisma.bookingDetail.groupBy({
@@ -671,49 +676,65 @@ export const getChatbotProducts = async (req, res) => {
       stokMap = Object.fromEntries(
         konflik.map((k) => [k.id_product, k._sum.jumlah || 0])
       );
-
-      const conflictedProductIds = konflik.map((k) => k.id_product);
-
-      // Filter ID produk yang stok_total-nya sudah habis dipesan di tanggal tersebut
-      if (conflictedProductIds.length > 0) {
-        const productsStok = await prisma.product.findMany({
-          where: { id_product: { in: conflictedProductIds } },
-          select: { id_product: true, stok_total: true },
-        });
-
-        const fullyBookedProductIds = productsStok
-          .filter((p) => (stokMap[p.id_product] || 0) >= p.stok_total)
-          .map((p) => p.id_product);
-
-        if (fullyBookedProductIds.length > 0) {
-          whereClause.id_product = { notIn: fullyBookedProductIds };
-        }
-      }
     }
 
-    // Hanya ambil 10 item yang masih memiliki stok untuk direkomendasikan chatbot
+    // Ambil produk yang cocok (JANGAN disaring fullyBooked agar chatbot tahu barang ada di toko tapi sedang habis)
     const products = await prisma.product.findMany({
       where: whereClause,
       select: {
         id_product: true,
         nama: true,
         harga_per_hari: true,
-        stok_total: true
+        stok_total: true,
+        category: {
+          select: {
+            nama: true,
+          },
+        },
       },
-      take: 10
+      take: 15,
+      orderBy: { id_product: "asc" },
     });
 
-    // Sesuaikan stok_total dengan sisa stok aktual di tanggal tersebut
-    const finalProducts = products.map(p => ({
-      id_product: p.id_product,
-      nama: p.nama,
-      harga_per_hari: p.harga_per_hari,
-      stok_total: p.stok_total, // Kapasitas asli toko
-      stok_tersedia: p.stok_total - (stokMap[p.id_product] || 0) // Sisa ketersediaan di rentang tanggal
-    }));
+    // Hitung sisa stok dan sertakan status ketersediaan yang sangat jelas untuk AI Chatbot
+    const mapped = products.map((p) => {
+      const booked = stokMap[p.id_product] || 0;
+      const sisa = isDateFiltered
+        ? Math.max(0, p.stok_total - booked)
+        : p.stok_total;
 
-    res.json({ data: finalProducts });
+      const isAvailable = sisa > 0;
+
+      return {
+        id_product: p.id_product,
+        nama: p.nama,
+        kategori: p.category?.nama || "Alat Outdoor",
+        harga_per_hari: p.harga_per_hari,
+        stok_total: p.stok_total,
+        stok_tersedia: sisa,
+        is_available: isAvailable,
+        status: !isDateFiltered
+          ? "TERSEDIA (Perlu cek tanggal sewa)"
+          : isAvailable
+            ? `TERSEDIA (${sisa} Unit Ready)`
+            : "HABIS (Sudah dibooking penuh pada tanggal ini)",
+      };
+    });
+
+    // Urutkan produk yang ready terlebih dahulu agar AI merekomendasikan yang ready duluan
+    mapped.sort((a, b) => {
+      if (a.is_available === b.is_available) return 0;
+      return a.is_available ? -1 : 1;
+    });
+
+    res.json({
+      success: true,
+      query: queryText,
+      periode_sewa: isDateFiltered ? `${tanggal_mulai} s/d ${tanggal_selesai}` : "Tidak ditentukan",
+      total_ditemukan: mapped.length,
+      data: mapped,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ success: false, error: error.message });
   }
 };
