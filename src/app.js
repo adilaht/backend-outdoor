@@ -40,6 +40,14 @@ app.use(sessionMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// 3.5 Normalisasi URL jika ada leading double-slash (misal: //storage -> /storage)
+app.use((req, res, next) => {
+  if (req.url.startsWith('//')) {
+    req.url = req.url.replace(/^\/+/, '/');
+  }
+  next();
+});
+
 // 4. Folder static asset
 app.use("/uploads", express.static("uploads")); // Ini untuk foto produk (publik)
 
