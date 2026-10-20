@@ -643,16 +643,50 @@ export const getPopularProducts = async (req, res) => {
 export const getChatbotProducts = async (req, res) => {
   try {
     const { search, q, tanggal_mulai, tanggal_selesai } = req.query;
-    const queryText = (search || q || "").trim();
+    const queryText = (search || q || "").trim().toLowerCase();
 
-    // Support pencarian multi-kata (contoh: "tenda 4" cocok dengan "Tenda Dome Kapasitas 4 Orang")
+    // 🌟 Kamus sinonim & istilah outdoor populer (mengatasi perbedaan ejaan Inggris vs Indonesia / slang)
+    const SYNONYM_MAP = {
+      carrier: ["carrier", "carier", "keril"],
+      carier: ["carrier", "carier", "keril"],
+      keril: ["carrier", "carier", "keril"],
+      tas: ["carrier", "carier", "keril", "tas"],
+      hydropack: ["hydropack", "tas minum", "tas kecil", "ransel kecil", "daypack"],
+      sb: ["sleeping bag", "sleepingbag", "sb"],
+      sleepingbag: ["sleeping bag", "sleepingbag", "sb"],
+      "sleeping bag": ["sleeping bag", "sleepingbag", "sb"],
+      nesting: ["nesting", "cooking set", "alat masak", "panci", "kompor"],
+      "cooking set": ["nesting", "cooking set", "alat masak", "panci"],
+      headlamp: ["headlamp", "senter", "lampu"],
+      senter: ["headlamp", "senter", "lampu"],
+      flysheet: ["flysheet", "flisheet", "fly sheet"],
+      flisheet: ["flysheet", "flisheet", "fly sheet"],
+      tracking: ["trekking", "tracking"],
+      trekking: ["trekking", "tracking"],
+      matras: ["matras", "alas tidur", "foil"],
+    };
+
     const words = queryText.split(/\s+/).filter(Boolean);
+    const stopWords = new Set(["alat", "sewa", "rental", "buat", "untuk", "yang", "dan", "di", "ke", "ada"]);
+    const meaningfulWords = words.filter((w) => !stopWords.has(w));
+    const targetWords = meaningfulWords.length > 0 ? meaningfulWords : words;
+
+    // Bangun filter pencarian cerdas yang memeriksa nama, kategori, dan deskripsi produk beserta sinonimnya
+    const searchConditions = targetWords.map((word) => {
+      const synonyms = SYNONYM_MAP[word] || [word];
+      return {
+        OR: synonyms.flatMap((term) => [
+          { nama: { contains: term } },
+          { deskripsi: { contains: term } },
+          { category: { nama: { contains: term } } },
+        ]),
+      };
+    });
+
     const whereClause = {
       is_active: true,
-      ...(words.length > 0 && {
-        AND: words.map((w) => ({
-          nama: { contains: w },
-        })),
+      ...(searchConditions.length > 0 && {
+        AND: searchConditions,
       }),
     };
 
