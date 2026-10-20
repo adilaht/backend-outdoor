@@ -23,6 +23,9 @@ import { authMiddleware } from "./middlewares/authMiddleware.js";
 
 const app = express();
 
+// 0. Trust Proxy (Wajib saat di belakang Nginx/Reverse Proxy agar rate limiter membaca IP asli client)
+app.set("trust proxy", 1);
+
 // 1. Setup CORS paling atas
 app.use(cors({
     origin: process.env.FRONTEND_URL || 'http://localhost:4000', 

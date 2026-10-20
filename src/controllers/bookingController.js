@@ -110,10 +110,12 @@ export const checkoutBooking = async (req, res) => {
       },
     });
 
-    // ✅ Kirim email token via nodemailer
-    await sendOTPEmail(email, kode_otp);
+    // ✅ Kirim email token via nodemailer di background (non-blocking agar respon ke client instan)
+    sendOTPEmail(email, kode_otp).catch((err) => {
+      console.error("💥 Gagal kirim email OTP di background:", err.message);
+    });
 
-    // Kirim respons balik ke Next.js
+    // Kirim respons balik ke Next.js secara instan
     res.json({
       success: true,
       message: "OTP berhasil dikirim ke email",
@@ -400,7 +402,10 @@ export const resendOTP = async (req, res) => {
     // ✅ ambil email dari DB
     const email = existing.kontak;
 
-    await sendOTPEmail(email, newKode);
+    // ✅ Kirim email token via nodemailer di background (non-blocking)
+    sendOTPEmail(email, newKode).catch((err) => {
+      console.error("💥 Gagal kirim ulang email OTP di background:", err.message);
+    });
 
     res.json({
       message: "OTP berhasil dikirim ulang",

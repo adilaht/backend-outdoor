@@ -29,6 +29,8 @@ export const setCartDateController = async (req, res) => {
       tanggal_selesai
     );
 
+    await invalidateCache(`cart:${req.session_id}`);
+
     res.json({
       message: "Tanggal cart berhasil diset",
     });
@@ -273,7 +275,7 @@ export const clearCartController = async (req, res) => {
     const cart = await getOrCreateCart(req.session_id);
 
     await clearCart(cart.id_cart);
-
+    await invalidateCache(`cart:${req.session_id}`);
 
     res.json({
       message: "Cart dikosongkan",
