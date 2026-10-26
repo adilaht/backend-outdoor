@@ -206,7 +206,7 @@ export const verifyBooking = async (req, res) => {
 
       const oldFolder = `./storage/private/bookings/${req.session_id}`;
       if (fs.existsSync(oldFolder)) {
-        fs.rmdirSync(oldFolder, { recursive: true });
+        fs.rmSync(oldFolder, { recursive: true, force: true });
       }
     }
 

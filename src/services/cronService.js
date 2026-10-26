@@ -131,7 +131,7 @@ export const startCronJobs = () => {
             // Coba hapus folder kosong booking tersebut
             const folderPath = path.dirname(filePath);
             if (fs.existsSync(folderPath) && fs.readdirSync(folderPath).length === 0) {
-              fs.rmdirSync(folderPath);
+              fs.rmSync(folderPath, { recursive: true, force: true });
             }
           }
           
