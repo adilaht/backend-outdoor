@@ -18,8 +18,8 @@ const snap = new midtransClient.Snap({
 });
 
 export const checkoutBooking = async (req, res) => {
-  console.log("ISI BODY:", req.body); // Cek apakah teks (nama, dll) masuk
-  console.log("ISI FILE:", req.file); // Cek apakah file masuk
+  const t_start = Date.now();
+  console.log(`\n🚀 [CHECKOUT START] Session: ${req.session_id} | File: ${req.file?.filename} (${req.file?.size} bytes) | Multer: ${req.multerDuration || 0}ms`);
   try {
     // 1. Ambil data teks biasa dari req.body
     const { nama_customer, email, no_hp, tanggal_mulai, tanggal_selesai, alamat } = req.body;
@@ -42,6 +42,7 @@ export const checkoutBooking = async (req, res) => {
     const dateMulai = new Date(`${tanggal_mulai}T00:00:00.000Z`);
     const dateSelesai = new Date(`${tanggal_selesai}T23:59:59.000Z`);
 
+    const t_before_cart = Date.now();
     const cart = await prisma.cart.findUnique({
       where: { session_id: req.session_id },
       include: {
@@ -50,17 +51,20 @@ export const checkoutBooking = async (req, res) => {
         },
       },
     });
+    const dur_cart = Date.now() - t_before_cart;
 
     if (!cart || cart.items.length === 0) {
       return res.status(400).json({ error: "Keranjang belanja Anda masih kosong" });
     }
 
     // 🔥 VALIDASI STOK BATCH (Bebas N+1)
+    const t_before_stock = Date.now();
     const { is_all_available, results: checkoutStockResults } = await checkStockBatch({
       items: cart.items,
       tanggal_mulai: dateMulai,
       tanggal_selesai: dateSelesai,
     });
+    const dur_stock = Date.now() - t_before_stock;
 
     if (!is_all_available) {
       const unavailable = checkoutStockResults.find((r) => !r.is_available);
@@ -69,13 +73,14 @@ export const checkoutBooking = async (req, res) => {
       });
     }
 
-    // Hapus rekam jejak kode OTP lama yang hangus / belum terverifikasi
-    await prisma.oTPVerification.deleteMany({
+    // ✅ Hapus OTP lama sesi ini secara terindeks (idx_otp_session_verified) di background
+    // Tidak di-await agar tidak menahan proses respons HTTP dan menghindari lock wait InnoDB
+    prisma.oTPVerification.deleteMany({
       where: {
-        kontak: email,
+        session_id: req.session_id,
         is_verified: false,
       },
-    });
+    }).catch((err) => console.warn("Pembersihan OTP lama sesi (non-blocking):", err.message));
 
     // ✅ Generate OTP 6 Digit String
     //  KODE BARU (Paling Aman menggunakan Kriptografi):
@@ -91,6 +96,7 @@ export const checkoutBooking = async (req, res) => {
     const sanitizedItems = JSON.parse(JSON.stringify(cart.items));
 
     // ✅ Simpan OTP + temp data ke DB
+    const t_before_otp = Date.now();
     await prisma.oTPVerification.create({
       data: {
         kontak: email,
@@ -109,11 +115,15 @@ export const checkoutBooking = async (req, res) => {
         },
       },
     });
+    const dur_otp = Date.now() - t_before_otp;
 
     // ✅ Kirim email token via nodemailer di background (non-blocking agar respon ke client instan)
     sendOTPEmail(email, kode_otp).catch((err) => {
       console.error("💥 Gagal kirim email OTP di background:", err.message);
     });
+
+    const total_dur = Date.now() - t_start;
+    console.log(`✅ [CHECKOUT SUKSES] Total: ${total_dur}ms (Multer: ${req.multerDuration || 0}ms | Cart: ${dur_cart}ms | Stock: ${dur_stock}ms | CreateOTP: ${dur_otp}ms)`);
 
     // Kirim respons balik ke Next.js secara instan
     res.json({
@@ -122,7 +132,7 @@ export const checkoutBooking = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("💥 ERROR PADA CONTROLLER CHECKOUT:", error);
+    console.error(`💥 ERROR PADA CONTROLLER CHECKOUT (${Date.now() - t_start}ms):`, error);
     res.status(500).json({ error: error.message });
   }
 };

@@ -7,8 +7,10 @@ const router = express.Router();
 
 // 🌟 UPDATE: Masukkan middleware upload berkas di sini
 router.post('/checkout', (req, res, next) => {
+    const t_multer_start = Date.now();
     // 🌟 Jalankan Multer secara manual untuk mengisolasi aliran biner file
     uploadIdentitas.single('foto_identitas')(req, res, function (err) {
+        req.multerDuration = Date.now() - t_multer_start;
         if (err instanceof multer.MulterError) {
             console.error("💥 KESALAHAN INTERNAL MULTER:", err);
             return res.status(400).json({ error: `Gagal upload berkas: ${err.message}` });
