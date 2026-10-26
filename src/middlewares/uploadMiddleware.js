@@ -60,5 +60,5 @@ const fileFilter = (req, file, cb) => {
 export const uploadIdentitas = multer({
     storage: storage,
     fileFilter: fileFilter,
-    limits: { fileSize: 2 * 1024 * 1024 } // Batasi ketat maksimal 2MB
+    limits: { fileSize: 10 * 1024 * 1024 } // Dilonggarkan ke 10MB agar tidak ngepas dan aman dari overhead multipart
 });
