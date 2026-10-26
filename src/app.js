@@ -28,9 +28,9 @@ app.set("trust proxy", 1);
 
 // 1. Setup CORS paling atas
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:4000', 
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    credentials: true
+  origin: process.env.FRONTEND_URL || 'http://localhost:4000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  credentials: true
 }));
 
 // 1.5 Setup Cookie Parser
@@ -55,7 +55,7 @@ app.use((req, res, next) => {
 app.use("/uploads", express.static("uploads")); // Ini untuk foto produk (publik)
 
 // 4.1 Folder Storage Privat (Hanya untuk Admin / Authenticated)
-app.use("/storage", authMiddleware, express.static("storage")); 
+app.use("/storage", authMiddleware, express.static("storage"));
 // 4.5 Terapkan Global Rate Limiter untuk semua request API (biar scraping terbatasi)
 app.use("/api/", apiLimiter);
 

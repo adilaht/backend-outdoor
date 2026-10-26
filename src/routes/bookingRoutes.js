@@ -7,21 +7,26 @@ const router = express.Router();
 
 // 🌟 UPDATE: Masukkan middleware upload berkas di sini
 router.post('/checkout', (req, res, next) => {
-    const t_multer_start = Date.now();
-    // 🌟 Jalankan Multer secara manual untuk mengisolasi aliran biner file
+    const t_entry = Date.now();
+    const contentLength = req.headers['content-length'] ? `${Math.round(req.headers['content-length'] / 1024)} KB` : 'Unknown';
+    console.log(`\n📥 [CHECKOUT 1/5 - HTTP MASUK] IP: ${req.ip} | Session: ${req.headers['x-session-id'] || 'None'} | Size: ${contentLength}`);
+
     uploadIdentitas.single('foto_identitas')(req, res, function (err) {
-        req.multerDuration = Date.now() - t_multer_start;
+        req.multerDuration = Date.now() - t_entry;
+        req.t_entry = t_entry;
+
         if (err instanceof multer.MulterError) {
-            console.error("💥 KESALAHAN INTERNAL MULTER:", err);
+            console.error(`💥 [CHECKOUT ERROR MULTER] (${req.multerDuration}ms):`, err);
             return res.status(400).json({ error: `Gagal upload berkas: ${err.message}` });
         } else if (err) {
-            console.error("💥 KESALAHAN FILTER BERKAS:", err);
+            console.error(`💥 [CHECKOUT ERROR FILTER] (${req.multerDuration}ms):`, err);
             return res.status(400).json({ error: err.message });
         }
 
-        // Jika aman, validasi apakah file beneran nempel di req setelah melewati Multer
         if (!req.file) {
-            console.error("🚨 WARNING: Multer lolos tanpa error, tapi req.file tetap KOSONG!");
+            console.warn(`🚨 [CHECKOUT WARNING] Multer lolos tapi req.file kosong (${req.multerDuration}ms)!`);
+        } else {
+            console.log(`📦 [CHECKOUT 2/5 - MULTER SELESAI] Durasi: ${req.multerDuration}ms | File: ${req.file.filename} (${Math.round(req.file.size / 1024)} KB)`);
         }
 
         next();

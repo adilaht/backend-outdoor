@@ -52,6 +52,7 @@ export const checkoutBooking = async (req, res) => {
       },
     });
     const dur_cart = Date.now() - t_before_cart;
+    console.log(`🛒 [CHECKOUT 3/5 - AMBIL KERANJANG] Durasi: ${dur_cart}ms | Items: ${cart?.items?.length || 0}`);
 
     if (!cart || cart.items.length === 0) {
       return res.status(400).json({ error: "Keranjang belanja Anda masih kosong" });
@@ -65,6 +66,7 @@ export const checkoutBooking = async (req, res) => {
       tanggal_selesai: dateSelesai,
     });
     const dur_stock = Date.now() - t_before_stock;
+    console.log(`📊 [CHECKOUT 4/5 - VALIDASI STOK BATCH] Durasi: ${dur_stock}ms | Available: ${is_all_available}`);
 
     if (!is_all_available) {
       const unavailable = checkoutStockResults.find((r) => !r.is_available);
@@ -83,13 +85,8 @@ export const checkoutBooking = async (req, res) => {
     }).catch((err) => console.warn("Pembersihan OTP lama sesi (non-blocking):", err.message));
 
     // ✅ Generate OTP 6 Digit String
-    //  KODE BARU (Paling Aman menggunakan Kriptografi):
-    // Mengambil 3 byte data acak murni dari kernel sistem, lalu dikonversi ke angka integer
-    // ✅ GANTI DENGAN KODE INI (Antipeluru di semua versi Node.js):
     const randomBuffer = crypto.randomBytes(4); // Ambil 4 byte (32-bit)
-    const randomNumber = randomBuffer.readUInt32BE(0); // Menggunakan UInt32BE (pasti ada di semua versi)
-
-    // Modulo 900.000 lalu ditambah 100.000 agar hasilnya selalu tepat 6 digit (100000 - 999999)
+    const randomNumber = randomBuffer.readUInt32BE(0); // Menggunakan UInt32BE
     const kode_otp = (100000 + (randomNumber % 900000)).toString();
 
     // 🌟 TAMBAHAN: Amankan konversi objek items (DateTime fields sanitization untuk tipe JSON Prisma)
@@ -116,14 +113,15 @@ export const checkoutBooking = async (req, res) => {
       },
     });
     const dur_otp = Date.now() - t_before_otp;
+    console.log(`🔐 [CHECKOUT 5/5 - SIMPAN OTP] Durasi: ${dur_otp}ms | Email: ${email}`);
 
     // ✅ Kirim email token via nodemailer di background (non-blocking agar respon ke client instan)
     sendOTPEmail(email, kode_otp).catch((err) => {
       console.error("💥 Gagal kirim email OTP di background:", err.message);
     });
 
-    const total_dur = Date.now() - t_start;
-    console.log(`✅ [CHECKOUT SUKSES] Total: ${total_dur}ms (Multer: ${req.multerDuration || 0}ms | Cart: ${dur_cart}ms | Stock: ${dur_stock}ms | CreateOTP: ${dur_otp}ms)`);
+    const total_dur = Date.now() - (req.t_entry || t_start);
+    console.log(`✅ [CHECKOUT SUKSES] Total Keseluruhan: ${total_dur}ms (Multer: ${req.multerDuration || 0}ms | Cart: ${dur_cart}ms | Stock: ${dur_stock}ms | OTP: ${dur_otp}ms)\n`);
 
     // Kirim respons balik ke Next.js secara instan
     res.json({
