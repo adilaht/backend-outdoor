@@ -136,6 +136,7 @@ export const createCategory = async (req, res) => {
 
     // invalidate cache setelah data berubah
     await invalidateCache("categories:*");
+    await invalidateCache("products:*");
 
     res.status(201).json({
       message: "Kategori berhasil dibuat",
@@ -177,9 +178,10 @@ export const updateCategory = async (req, res) => {
       }
     });
 
-    // invalidate cache untuk kategori ini + list kategori
+    // invalidate cache untuk kategori ini + list kategori + produk/katalog
     await invalidateCache(`category:${id}`);
     await invalidateCache("categories:*");
+    await invalidateCache("products:*");
 
     res.json({
       message: "Kategori berhasil diperbarui",
@@ -210,9 +212,10 @@ export const deleteCategory = async (req, res) => {
       where: { id_category: Number(id) }
     });
 
-    // invalidate cache untuk kategori ini + list kategori
+    // invalidate cache untuk kategori ini + list kategori + produk/katalog
     await invalidateCache(`category:${id}`);
     await invalidateCache("categories:*");
+    await invalidateCache("products:*");
 
     res.json({
       message: "Kategori berhasil dihapus"
