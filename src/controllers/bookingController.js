@@ -424,6 +424,103 @@ export const resendOTP = async (req, res) => {
   }
 };
 
+export const changeEmailOTP = async (req, res) => {
+  try {
+    const { new_email } = req.body;
+
+    if (!new_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(new_email.trim())) {
+      return res.status(400).json({ error: "Format email baru tidak valid." });
+    }
+
+    const cleanEmail = new_email.trim().toLowerCase();
+
+    // 1. Cari verifikasi OTP aktif untuk sesi ini yang belum verified
+    const existing = await prisma.oTPVerification.findFirst({
+      where: {
+        session_id: req.session_id,
+        is_verified: false,
+      },
+      orderBy: {
+        created_at: "desc",
+      },
+    });
+
+    if (!existing) {
+      return res.status(400).json({
+        error: "Sesi verifikasi OTP tidak ditemukan atau sudah selesai. Silakan lakukan checkout kembali.",
+      });
+    }
+
+    // 2. Batasi pergantian email di layar OTP maksimal 1 kali
+    if (existing.temp_data?.has_changed_email) {
+      return res.status(400).json({
+        error: "Pergantian email di layar OTP hanya dapat dilakukan 1 kali. Silakan klik tombol 'Kembali' jika ingin mengubah data kembali.",
+      });
+    }
+
+    // 3. Cegah jika email baru persis sama
+    if (existing.kontak.toLowerCase() === cleanEmail) {
+      return res.status(400).json({
+        error: "Alamat email baru sama dengan email saat ini. Gunakan tombol 'Kirim Ulang OTP' jika belum menerima kode.",
+      });
+    }
+
+    // 4. Cooldown 10 detik antar pergantian email agar tidak spam
+    const now = new Date();
+    const diff = (now - existing.created_at) / 1000;
+    if (diff < 10) {
+      return res.status(429).json({
+        error: `Mohon tunggu ${Math.ceil(10 - diff)} detik sebelum mengganti email lagi.`,
+      });
+    }
+
+    // 5. Generate kode OTP 6 digit baru
+    const randomBuffer = crypto.randomBytes(4);
+    const randomNumber = randomBuffer.readUInt32BE(0);
+    const newKode = (100000 + (randomNumber % 900000)).toString();
+
+    // 6. Update temp_data agar email pemesan terbarukan dan tandai sudah diganti 1x
+    let updatedTempData = existing.temp_data;
+    if (typeof updatedTempData === "object" && updatedTempData !== null) {
+      updatedTempData = {
+        ...updatedTempData,
+        email: cleanEmail,
+        has_changed_email: true,
+      };
+    } else {
+      updatedTempData = { email: cleanEmail, has_changed_email: true };
+    }
+
+    // 6. Update database record OTPVerification
+    await prisma.oTPVerification.update({
+      where: { id_otp: existing.id_otp },
+      data: {
+        kontak: cleanEmail,
+        kode_otp: newKode,
+        temp_data: updatedTempData,
+        expired_at: new Date(Date.now() + 5 * 60 * 1000),
+        created_at: new Date(),
+      },
+    });
+
+    // 7. Kirim email OTP ke alamat baru via nodemailer di background
+    sendOTPEmail(cleanEmail, newKode).catch((err) => {
+      console.error("💥 Gagal kirim email OTP ke email baru di background:", err.message);
+    });
+
+    console.log(`✉️ [EMAIL DIUBAH] Sesi ${req.session_id}: ${existing.kontak} -> ${cleanEmail}`);
+
+    return res.json({
+      success: true,
+      message: "Email berhasil diperbarui dan kode OTP baru telah dikirim!",
+      email: cleanEmail,
+    });
+  } catch (error) {
+    console.error("💥 Error saat changeEmailOTP:", error);
+    return res.status(500).json({ error: error.message || "Gagal mengubah email verifikasi." });
+  }
+};
+
 export const checkBookingStatus = async (req, res) => {
   try {
     const { id, email } = req.query;
@@ -473,3 +570,72 @@ export const checkBookingStatus = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+export const cancelBookingByUser = async (req, res) => {
+  try {
+    const { kode_booking } = req.body;
+
+    if (!kode_booking) {
+      return res.status(400).json({ error: "Kode booking wajib disertakan." });
+    }
+
+    const booking = await prisma.booking.findUnique({
+      where: { kode_booking },
+      include: { details: true },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking tidak ditemukan." });
+    }
+
+    // Hanya boleh membatalkan jika status masih pending_payment
+    if (booking.status !== "pending_payment") {
+      return res.status(400).json({
+        error: `Booking tidak dapat dibatalkan karena statusnya sudah [${booking.status}].`,
+      });
+    }
+
+    // Batalkan secara atomik dan lepaskan hold stok
+    await prisma.$transaction(async (tx) => {
+      // 1. Update status booking ke canceled (sesuai Enum Prisma: canceled)
+      await tx.booking.update({
+        where: { id_booking: booking.id_booking },
+        data: { status: "canceled" },
+      });
+
+      // 2. Update status payment ke cancel
+      await tx.payment.updateMany({
+        where: { id_booking: booking.id_booking, status: "pending" },
+        data: {
+          status: "cancel",
+          catatan: "Dibatalkan oleh customer di layar pembayaran.",
+        },
+      });
+
+      // 3. Catat StockLog IN untuk mengembalikan ketersediaan stok
+      const tglMulai = new Date(booking.tanggal_mulai).toISOString().split("T")[0];
+      const tglSelesai = new Date(booking.tanggal_selesai).toISOString().split("T")[0];
+
+      await tx.stockLog.createMany({
+        data: booking.details.map((item) => ({
+          id_product: item.id_product,
+          perubahan: "IN",
+          jumlah: item.jumlah,
+          keterangan: `Pembatalan oleh Customer - Booking ${booking.kode_booking} (Tgl: ${tglMulai} s/d ${tglSelesai})`,
+        })),
+      });
+    });
+
+    await invalidateCache("products:*");
+
+    console.log(`🚫 [BOOKING DIBATALKAN OLEH CUSTOMER] Kode: ${kode_booking}`);
+
+    return res.json({
+      success: true,
+      message: "Pesanan berhasil dibatalkan dan stok telah dilepaskan kembali.",
+    });
+  } catch (error) {
+    console.error("💥 Error saat cancelBookingByUser:", error);
+    return res.status(500).json({ error: error.message || "Gagal membatalkan pesanan." });
+  }
+};

@@ -638,12 +638,75 @@ export const getPopularProducts = async (req, res) => {
 };
 
 // ==========================================
-// ENDPOINT KHUSUS CHATBOT
+// ENDPOINT KHUSUS CHATBOT: KATALOG RINGKAS (LIST SEMUA ALAT PER KATEGORI)
+// ==========================================
+export const getChatbotCatalog = async (req, res) => {
+  try {
+    const cacheKey = "products:chatbot:catalog";
+
+    // 1. Cek Redis cache
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // 2. Ambil kategori dan produk aktif
+    const categories = await prisma.category.findMany({
+      select: {
+        id_category: true,
+        nama: true,
+        products: {
+          where: { is_active: true },
+          select: {
+            nama: true,
+          },
+          orderBy: { nama: "asc" },
+        },
+      },
+      orderBy: { nama: "asc" },
+    });
+
+    const katalog = {};
+    let totalProduk = 0;
+
+    categories.forEach((cat) => {
+      if (cat.products.length > 0) {
+        katalog[cat.nama] = cat.products.map((p) => p.nama);
+        totalProduk += cat.products.length;
+      }
+    });
+
+    const responseData = {
+      success: true,
+      total_kategori: Object.keys(katalog).length,
+      total_produk: totalProduk,
+      katalog,
+    };
+
+    // 3. Simpan ke Redis cache (TTL 3600 detik = 1 jam)
+    // Otomatis terhapus saat admin create/update/delete produk via invalidateCache("products:*")
+    await setCache(cacheKey, responseData, 3600);
+
+    res.json(responseData);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// ==========================================
+// ENDPOINT KHUSUS CHATBOT: PENCARIAN & CEK STOK SPESIFIK
 // ==========================================
 export const getChatbotProducts = async (req, res) => {
   try {
     const { search, q, tanggal_mulai, tanggal_selesai } = req.query;
     const queryText = (search || q || "").trim().toLowerCase();
+
+    // 🌟 Cek Redis cache terlebih dahulu (TTL 60 detik)
+    const cacheKey = `products:chatbot:search:q=${queryText}:mulai=${tanggal_mulai || 'none'}:selesai=${tanggal_selesai || 'none'}`;
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
 
     // 🌟 Kamus sinonim & istilah outdoor populer (mengatasi perbedaan ejaan Inggris vs Indonesia / slang)
     const SYNONYM_MAP = {
@@ -761,13 +824,19 @@ export const getChatbotProducts = async (req, res) => {
       return a.is_available ? -1 : 1;
     });
 
-    res.json({
+    const responseData = {
       success: true,
       query: queryText,
       periode_sewa: isDateFiltered ? `${tanggal_mulai} s/d ${tanggal_selesai}` : "Tidak ditentukan",
       total_ditemukan: mapped.length,
       data: mapped,
-    });
+    };
+
+    // 🌟 Simpan hasil ke Redis cache selama 60 detik (1 menit)
+    // Cache otomatis terhapus saat terjadi booking baru via invalidateCache("products:*")
+    await setCache(cacheKey, responseData, 60);
+
+    res.json(responseData);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

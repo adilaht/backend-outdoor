@@ -1,12 +1,13 @@
 import express from "express";
 import * as bookingController from "../controllers/bookingController.js";
 import { uploadIdentitas } from "../middlewares/uploadMiddleware.js";
+import { otpLimiter } from "../middlewares/rateLimitMiddleware.js";
 import multer from "multer";
 
 const router = express.Router();
 
-// 🌟 UPDATE: Masukkan middleware upload berkas di sini
-router.post('/checkout', (req, res, next) => {
+// 🌟 Terapkan otpLimiter (maks 5 request OTP / 15 menit per IP)
+router.post('/checkout', otpLimiter, (req, res, next) => {
     const t_entry = Date.now();
     const contentLength = req.headers['content-length'] ? `${Math.round(req.headers['content-length'] / 1024)} KB` : 'Unknown';
     console.log(`\n📥 [CHECKOUT 1/5 - HTTP MASUK] IP: ${req.ip} | Session: ${req.headers['x-session-id'] || 'None'} | Size: ${contentLength}`);
@@ -33,8 +34,15 @@ router.post('/checkout', (req, res, next) => {
     });
 }, bookingController.checkoutBooking);
 
+// Verifikasi OTP (tidak dibatasi otpLimiter agar input user tidak terhalang)
 router.post("/verify", bookingController.verifyBooking);
-router.post("/resend-otp", bookingController.resendOTP);
+
+// Kirim Ulang OTP & Ubah Email (dibatasi otpLimiter maks 5x per 15 menit bersama dengan checkout)
+router.post("/resend-otp", otpLimiter, bookingController.resendOTP);
+router.post("/change-email", otpLimiter, bookingController.changeEmailOTP);
+
+// Pembatalan & Pengecekan Status
+router.post("/cancel", bookingController.cancelBookingByUser);
 router.get("/check", bookingController.checkBookingStatus);
 
 export default router;
